@@ -82,4 +82,20 @@ export class DocumentsRepository {
       updatedAt: row.updated_at.toISOString(),
     };
   }
+  async updateStatus(
+    id: string,
+    status: DocumentStatus,
+  ): Promise<DocumentRecord> {
+    const result = await this.databaseService.query<DocumentRow>(
+      `
+        UPDATE documents
+        SET status = $2, updated_at = now()
+        WHERE id = $1
+        RETURNING id, filename, mime_type, source, status, created_at, updated_at
+      `,
+      [id, status],
+    );
+
+    return this.mapRow(result.rows[0]);
+  }
 }

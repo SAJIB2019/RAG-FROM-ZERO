@@ -58,7 +58,7 @@ describe('Health endpoint', () => {
       })
       .expect(201);
     expect(response.body.id).toEqual(expect.any(String));
-    expect(response.body.status).toBe('uploaded');
+    expect(response.body.status).toBe('queued');
     expect(response.body.filename).toBe('policy.md');
     expect(response.body.mimeType).toBe('text/markdown');
   });
@@ -81,7 +81,7 @@ describe('Health endpoint', () => {
     // 2. Use Jest's native expect assertion so asymmetric matchers evaluate safely
     expect(response.body).toEqual({
       id: created.body.id,
-      status: 'uploaded',
+      status: 'queued',
       filename: 'terms.txt',
       mimeType: 'text/plain',
       source: null,

@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common';
-import { DocumentsController } from './documents.controller';
-import { DocumentsService } from './documents.service';
-import { DocumentsRepository } from './documents.repository';
+
 import { DatabaseModule } from '../database/database.module';
+import { QueuesModule } from '../queues/queues.module';
+import { DocumentsController } from './documents.controller';
+import { DocumentsRepository } from './documents.repository';
+import { DocumentsService } from './documents.service';
 
 @Module({
-  imports: [DatabaseModule],
+  imports: [DatabaseModule, QueuesModule],
   controllers: [DocumentsController],
   providers: [DocumentsService, DocumentsRepository],
 })
