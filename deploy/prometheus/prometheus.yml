@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: rag-api
+    metrics_path: /api/metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - api:3000
+    authorization:
+      type: Bearer
+      credentials: replace-with-metrics-token

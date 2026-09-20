@@ -9,7 +9,6 @@ import {
 
 export type ProcessDocumentJobData = {
   documentId: string;
-  content: string;
 };
 
 @Injectable()

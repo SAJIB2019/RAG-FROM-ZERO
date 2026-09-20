@@ -13,6 +13,10 @@ import { DOCUMENT_PROCESSING_QUEUE } from './queue.constants';
         connection: {
           host: configService.getOrThrow<string>('REDIS_HOST'),
           port: configService.getOrThrow<number>('REDIS_PORT'),
+          password: configService.get<string>('REDIS_PASSWORD') || undefined,
+          tls: configService.getOrThrow<boolean>('REDIS_TLS') ? {} : undefined,
+          maxRetriesPerRequest: 3,
+          enableReadyCheck: true,
         },
       }),
     }),

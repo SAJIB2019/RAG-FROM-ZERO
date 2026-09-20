@@ -13,6 +13,9 @@ export class DatabaseService implements OnModuleDestroy {
       database: configService.getOrThrow<string>('POSTGRES_DB'),
       user: configService.getOrThrow<string>('POSTGRES_USER'),
       password: configService.getOrThrow<string>('POSTGRES_PASSWORD'),
+      ssl: configService.getOrThrow<boolean>('POSTGRES_SSL')
+        ? { rejectUnauthorized: true }
+        : undefined,
     });
   }
 

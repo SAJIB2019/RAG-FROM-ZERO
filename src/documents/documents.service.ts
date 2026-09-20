@@ -19,11 +19,11 @@ export class DocumentsService {
       mimeType: dto.mimeType,
       source: dto.source,
       status: 'uploaded',
+      rawText: dto.content,
     });
 
     await this.documentsQueueService.enqueueDocumentProcessing({
       documentId: document.id,
-      content: dto.content,
     });
 
     return this.documentsRepository.updateStatus(document.id, 'queued');

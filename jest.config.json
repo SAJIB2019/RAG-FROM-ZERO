@@ -1,0 +1,26 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "testEnvironment": "node",
+  "testRegex": ".*\\.spec\\.ts$",
+  "extensionsToTreatAsEsm": [".ts"],
+  "moduleNameMapper": {
+    "^(\\.{1,2}/.*)\\.js$": "$1"
+  },
+  "transform": {
+    "^.+\\.ts$": [
+      "ts-jest",
+      {
+        "tsconfig": {
+          "module": "ESNext",
+          "moduleResolution": "Node",
+          "target": "ES2022",
+          "emitDecoratorMetadata": true,
+          "experimentalDecorators": true,
+          "isolatedModules": true,
+          "esModuleInterop": true
+        },
+        "useESM": true
+      }
+    ]
+  }
+}

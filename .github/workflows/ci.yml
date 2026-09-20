@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: rag_from_zero
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d rag_from_zero"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_ENV: test
+      PORT: 3001
+      LOG_LEVEL: error
+      API_KEY: test-api-key
+      METRICS_API_KEY: test-metrics-key
+      DATABASE_URL: postgres://postgres:postgres@localhost:55432/rag_from_zero
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 55432
+      POSTGRES_DB: rag_from_zero
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_SSL: false
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ''
+      REDIS_TLS: false
+      EMBEDDING_PROVIDER: fake
+      LLM_PROVIDER: fake
+      EMBEDDING_DIMENSIONS: 1536
+      OPENAI_COMPATIBLE_BASE_URL: ''
+      OPENAI_COMPATIBLE_API_KEY: ''
+      LLM_MODEL: gpt-4.1-mini
+      EMBEDDING_MODEL: text-embedding-3-small
+      OPENAI_COMPATIBLE_TIMEOUT_MS: 30000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run prisma:generate
+      - run: npm run db:migrate
+      - run: npm run test:e2e

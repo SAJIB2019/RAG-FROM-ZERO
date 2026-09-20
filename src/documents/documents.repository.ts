@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 
 import { DatabaseService } from '../database/database.service';
 import { DocumentStatus } from './types/document-status.type';
@@ -23,6 +24,18 @@ type DocumentRow = {
   updated_at: Date;
 };
 
+type DocumentTextRow = {
+  raw_text: string | null;
+};
+
+export type DocumentChunkInput = {
+  documentId: string;
+  chunkIndex: number;
+  content: string;
+  tokenCount: number;
+  metadata?: Record<string, unknown>;
+};
+
 @Injectable()
 export class DocumentsRepository {
   constructor(private readonly databaseService: DatabaseService) {}
@@ -33,11 +46,12 @@ export class DocumentsRepository {
     mimeType: string;
     source?: string;
     status: DocumentStatus;
+    rawText: string;
   }): Promise<DocumentRecord> {
     const result = await this.databaseService.query<DocumentRow>(
       `
-        INSERT INTO documents (id, filename, mime_type, source, status)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO documents (id, filename, mime_type, source, status, raw_text)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id, filename, mime_type, source, status, created_at, updated_at
       `,
       [
@@ -46,6 +60,7 @@ export class DocumentsRepository {
         input.mimeType,
         input.source ?? null,
         input.status,
+        input.rawText,
       ],
     );
 
@@ -69,6 +84,59 @@ export class DocumentsRepository {
 
   async deleteAll(): Promise<void> {
     await this.databaseService.query('DELETE FROM documents');
+  }
+
+  async findRawTextById(id: string): Promise<string | null> {
+    const result = await this.databaseService.query<DocumentTextRow>(
+      `
+        SELECT raw_text
+        FROM documents
+        WHERE id = $1
+      `,
+      [id],
+    );
+
+    return result.rows[0]?.raw_text ?? null;
+  }
+
+  async replaceChunks(chunks: DocumentChunkInput[]): Promise<void> {
+    if (chunks.length === 0) {
+      return;
+    }
+
+    const documentId = chunks[0].documentId;
+
+    await this.databaseService.query(
+      `
+        DELETE FROM document_chunks
+        WHERE document_id = $1
+      `,
+      [documentId],
+    );
+
+    for (const chunk of chunks) {
+      await this.databaseService.query(
+        `
+          INSERT INTO document_chunks (
+            id,
+            document_id,
+            chunk_index,
+            content,
+            token_count,
+            metadata
+          )
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `,
+        [
+          randomUUID(),
+          chunk.documentId,
+          chunk.chunkIndex,
+          chunk.content,
+          chunk.tokenCount,
+          JSON.stringify(chunk.metadata ?? {}),
+        ],
+      );
+    }
   }
 
   private mapRow(row: DocumentRow): DocumentRecord {
@@ -98,4 +166,24 @@ export class DocumentsRepository {
 
     return this.mapRow(result.rows[0]);
   }
+
+  async updateChunkEmbedding(input: {
+    documentId: string;
+    chunkIndex: number;
+    embedding: number[];
+  }): Promise<void> {
+    await this.databaseService.query(
+      `
+        UPDATE document_chunks
+        SET embedding = $3::vector
+        WHERE document_id = $1
+          AND chunk_index = $2
+      `,
+      [input.documentId, input.chunkIndex, toVectorSql(input.embedding)],
+    );
+  }
+}
+
+function toVectorSql(vector: number[]): string {
+  return `[${vector.join(',')}]`;
 }

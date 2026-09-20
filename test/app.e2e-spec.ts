@@ -13,6 +13,7 @@ describe('Health endpoint', () => {
     process.env.NODE_ENV = 'test';
     process.env.PORT = '3001';
     process.env.LOG_LEVEL = 'debug';
+    process.env.API_KEY = 'test-api-key';
     process.env.POSTGRES_HOST = 'localhost';
     process.env.POSTGRES_PORT = '55432';
     process.env.POSTGRES_DB = 'rag_from_zero';
@@ -20,6 +21,12 @@ describe('Health endpoint', () => {
     process.env.POSTGRES_PASSWORD = 'postgres';
     process.env.REDIS_HOST = 'localhost';
     process.env.REDIS_PORT = '6379';
+    process.env.DATABASE_URL =
+      'postgres://postgres:postgres@localhost:55432/rag_from_zero';
+    process.env.CORS_ORIGIN = '*';
+    process.env.REQUEST_BODY_LIMIT = '1mb';
+    process.env.THROTTLE_TTL_SECONDS = '60';
+    process.env.THROTTLE_LIMIT = '1000';
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
@@ -49,6 +56,7 @@ describe('Health endpoint', () => {
   it('POST /documents creates a document record', async () => {
     const response = await request(app.getHttpServer())
       .post('/documents')
+      .set('x-api-key', 'test-api-key')
       .send({
         filename: 'policy.md',
         mimeType: 'text/markdown',
@@ -66,6 +74,7 @@ describe('Health endpoint', () => {
   it('Get /documents/:id returns the stored document metadata', async () => {
     const created = await request(app.getHttpServer())
       .post('/documents')
+      .set('x-api-key', 'test-api-key')
       .send({
         filename: 'terms.txt',
         mimeType: 'text/plain',
@@ -87,6 +96,30 @@ describe('Health endpoint', () => {
       source: null,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
+    });
+  });
+
+  it('POST /query returns an empty result set when no embedded chunks exist', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/query')
+      .set('x-api-key', 'test-api-key')
+      .send({
+        question: 'What is the refund policy?',
+      })
+      .expect(201);
+
+    expect(response.body).toEqual({
+      question: 'What is the refund policy?',
+      answer:
+        "I don't have enough retrieved context to answer that question yet.",
+      sources: [],
+      debug: {
+        results: [],
+        context: {
+          text: '',
+          sources: [],
+        },
+      },
     });
   });
 });
