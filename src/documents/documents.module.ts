@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 
-import { DatabaseModule } from '../database/database.module';
+import { PrismaModule } from '../prisma/prisma.module';
 import { QueuesModule } from '../queues/queues.module';
 import { DocumentFileExtractorService } from './document-file-extractor.service';
 import { DocumentsController } from './documents.controller';
@@ -12,7 +12,7 @@ import { DocumentsService } from './documents.service';
 
 @Module({
   imports: [
-    DatabaseModule,
+    PrismaModule,
     QueuesModule,
     MulterModule.registerAsync({
       inject: [ConfigService],

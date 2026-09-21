@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 
-import { DatabaseService } from '../database/database.service';
+import { Prisma, Document as PrismaDocument } from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 import { DocumentStatus } from './types/document-status.type';
 
 export type DocumentRecord = {
@@ -14,20 +15,6 @@ export type DocumentRecord = {
   updatedAt: string;
 };
 
-type DocumentRow = {
-  id: string;
-  filename: string;
-  mime_type: string;
-  source: string | null;
-  status: DocumentStatus;
-  created_at: Date;
-  updated_at: Date;
-};
-
-type DocumentTextRow = {
-  raw_text: string | null;
-};
-
 export type DocumentChunkInput = {
   documentId: string;
   chunkIndex: number;
@@ -38,7 +25,7 @@ export type DocumentChunkInput = {
 
 @Injectable()
 export class DocumentsRepository {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(private readonly prismaService: PrismaService) {}
 
   async create(input: {
     id: string;
@@ -48,55 +35,45 @@ export class DocumentsRepository {
     status: DocumentStatus;
     rawText: string;
   }): Promise<DocumentRecord> {
-    const result = await this.databaseService.query<DocumentRow>(
-      `
-        INSERT INTO documents (id, filename, mime_type, source, status, raw_text)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, filename, mime_type, source, status, created_at, updated_at
-      `,
-      [
-        input.id,
-        input.filename,
-        input.mimeType,
-        input.source ?? null,
-        input.status,
-        input.rawText,
-      ],
-    );
+    const document = await this.prismaService.document.create({
+      data: {
+        id: input.id,
+        filename: input.filename,
+        mimeType: input.mimeType,
+        source: input.source ?? null,
+        status: input.status,
+        rawText: input.rawText,
+      },
+    });
 
-    return this.mapRow(result.rows[0]);
+    return this.mapDocument(document);
   }
 
   async findById(id: string): Promise<DocumentRecord | null> {
-    const result = await this.databaseService.query<DocumentRow>(
-      `
-        SELECT id, filename, mime_type, source, status, created_at, updated_at
-        FROM documents
-        WHERE id = $1
-      `,
-      [id],
-    );
+    const document = await this.prismaService.document.findUnique({
+      where: {
+        id,
+      },
+    });
 
-    const row = result.rows[0];
-
-    return row ? this.mapRow(row) : null;
+    return document ? this.mapDocument(document) : null;
   }
 
   async deleteAll(): Promise<void> {
-    await this.databaseService.query('DELETE FROM documents');
+    await this.prismaService.document.deleteMany();
   }
 
   async findRawTextById(id: string): Promise<string | null> {
-    const result = await this.databaseService.query<DocumentTextRow>(
-      `
-        SELECT raw_text
-        FROM documents
-        WHERE id = $1
-      `,
-      [id],
-    );
+    const document = await this.prismaService.document.findUnique({
+      where: {
+        id,
+      },
+      select: {
+        rawText: true,
+      },
+    });
 
-    return result.rows[0]?.raw_text ?? null;
+    return document?.rawText ?? null;
   }
 
   async replaceChunks(chunks: DocumentChunkInput[]): Promise<void> {
@@ -106,65 +83,52 @@ export class DocumentsRepository {
 
     const documentId = chunks[0].documentId;
 
-    await this.databaseService.query(
-      `
-        DELETE FROM document_chunks
-        WHERE document_id = $1
-      `,
-      [documentId],
-    );
-
-    for (const chunk of chunks) {
-      await this.databaseService.query(
-        `
-          INSERT INTO document_chunks (
-            id,
-            document_id,
-            chunk_index,
-            content,
-            token_count,
-            metadata
-          )
-          VALUES ($1, $2, $3, $4, $5, $6)
-        `,
-        [
-          randomUUID(),
-          chunk.documentId,
-          chunk.chunkIndex,
-          chunk.content,
-          chunk.tokenCount,
-          JSON.stringify(chunk.metadata ?? {}),
-        ],
-      );
-    }
+    await this.prismaService.$transaction([
+      this.prismaService.documentChunk.deleteMany({
+        where: {
+          documentId,
+        },
+      }),
+      this.prismaService.documentChunk.createMany({
+        data: chunks.map((chunk) => ({
+          id: randomUUID(),
+          documentId: chunk.documentId,
+          chunkIndex: chunk.chunkIndex,
+          content: chunk.content,
+          tokenCount: chunk.tokenCount,
+          metadata: toPrismaJson(chunk.metadata ?? {}),
+        })),
+      }),
+    ]);
   }
 
-  private mapRow(row: DocumentRow): DocumentRecord {
+  private mapDocument(document: PrismaDocument): DocumentRecord {
     return {
-      id: row.id,
-      filename: row.filename,
-      mimeType: row.mime_type,
-      source: row.source,
-      status: row.status,
-      createdAt: row.created_at.toISOString(),
-      updatedAt: row.updated_at.toISOString(),
+      id: document.id,
+      filename: document.filename,
+      mimeType: document.mimeType,
+      source: document.source,
+      status: document.status as DocumentStatus,
+      createdAt: document.createdAt.toISOString(),
+      updatedAt: document.updatedAt.toISOString(),
     };
   }
+
   async updateStatus(
     id: string,
     status: DocumentStatus,
   ): Promise<DocumentRecord> {
-    const result = await this.databaseService.query<DocumentRow>(
-      `
-        UPDATE documents
-        SET status = $2, updated_at = now()
-        WHERE id = $1
-        RETURNING id, filename, mime_type, source, status, created_at, updated_at
-      `,
-      [id, status],
-    );
+    const document = await this.prismaService.document.update({
+      where: {
+        id,
+      },
+      data: {
+        status,
+        updatedAt: new Date(),
+      },
+    });
 
-    return this.mapRow(result.rows[0]);
+    return this.mapDocument(document);
   }
 
   async updateChunkEmbedding(input: {
@@ -172,18 +136,19 @@ export class DocumentsRepository {
     chunkIndex: number;
     embedding: number[];
   }): Promise<void> {
-    await this.databaseService.query(
-      `
+    await this.prismaService.$executeRaw`
         UPDATE document_chunks
-        SET embedding = $3::vector
-        WHERE document_id = $1
-          AND chunk_index = $2
-      `,
-      [input.documentId, input.chunkIndex, toVectorSql(input.embedding)],
-    );
+        SET embedding = ${toVectorSql(input.embedding)}::vector
+        WHERE document_id = ${input.documentId}::uuid
+          AND chunk_index = ${input.chunkIndex}
+      `;
   }
 }
 
 function toVectorSql(vector: number[]): string {
   return `[${vector.join(',')}]`;
+}
+
+function toPrismaJson(value: Record<string, unknown>): Prisma.InputJsonObject {
+  return value as Prisma.InputJsonObject;
 }
