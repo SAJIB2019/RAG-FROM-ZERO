@@ -3,11 +3,15 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 
-import { AppModule } from '../src/app.module';
-import { DocumentsRepository } from '../src/documents/documents.repository';
+import {
+  DocumentRecord,
+  DocumentsRepository,
+} from '../src/documents/documents.repository';
+import { QueryService } from '../src/query/query.service';
+
 describe('Health endpoint', () => {
   let app: INestApplication;
-  let documentsRepository: DocumentsRepository;
+  let documentsRepository: InMemoryDocumentsRepository;
 
   beforeAll(async () => {
     process.env.NODE_ENV = 'test';
@@ -25,16 +29,38 @@ describe('Health endpoint', () => {
       'postgres://postgres:postgres@localhost:55432/rag_from_zero';
     process.env.CORS_ORIGIN = '*';
     process.env.REQUEST_BODY_LIMIT = '1mb';
+    process.env.UPLOAD_MAX_FILE_BYTES = `${10 * 1024 * 1024}`;
     process.env.THROTTLE_TTL_SECONDS = '60';
     process.env.THROTTLE_LIMIT = '1000';
 
+    const { AppModule } = await import('../src/app.module');
+    documentsRepository = new InMemoryDocumentsRepository();
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(DocumentsRepository)
+      .useValue(documentsRepository)
+      .overrideProvider(QueryService)
+      .useValue({
+        query: (dto: { question: string }) =>
+          Promise.resolve({
+            question: dto.question,
+            answer:
+              "I don't have enough retrieved context to answer that question yet.",
+            sources: [],
+            debug: {
+              results: [],
+              context: {
+                text: '',
+                sources: [],
+              },
+            },
+          }),
+      })
+      .compile();
 
     app = moduleRef.createNestApplication();
     await app.init();
-    documentsRepository = app.get(DocumentsRepository);
   });
 
   beforeEach(async () => {
@@ -71,6 +97,24 @@ describe('Health endpoint', () => {
     expect(response.body.mimeType).toBe('text/markdown');
   });
 
+  it('POST /documents/upload extracts text from an uploaded file', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/documents/upload')
+      .set('x-api-key', 'test-api-key')
+      .field('source', 'upload-test')
+      .attach('file', Buffer.from('Uploaded policy text.'), {
+        filename: 'uploaded-policy.txt',
+        contentType: 'text/plain',
+      })
+      .expect(201);
+
+    expect(response.body.id).toEqual(expect.any(String));
+    expect(response.body.status).toBe('queued');
+    expect(response.body.filename).toBe('uploaded-policy.txt');
+    expect(response.body.mimeType).toBe('text/plain');
+    expect(response.body.source).toBe('upload-test');
+  });
+
   it('Get /documents/:id returns the stored document metadata', async () => {
     const created = await request(app.getHttpServer())
       .post('/documents')
@@ -85,6 +129,7 @@ describe('Health endpoint', () => {
     // 1. Let Supertest check the status code response wrapper
     const response = await request(app.getHttpServer())
       .get(`/documents/${created.body.id}`)
+      .set('x-api-key', 'test-api-key')
       .expect(200);
 
     // 2. Use Jest's native expect assertion so asymmetric matchers evaluate safely
@@ -123,3 +168,62 @@ describe('Health endpoint', () => {
     });
   });
 });
+
+class InMemoryDocumentsRepository {
+  private readonly documents = new Map<DocumentRecord['id'], DocumentRecord>();
+
+  create(input: {
+    id: string;
+    filename: string;
+    mimeType: string;
+    source?: string;
+    status: DocumentRecord['status'];
+    rawText: string;
+  }): Promise<DocumentRecord> {
+    const now = new Date().toISOString();
+    const document: DocumentRecord = {
+      id: input.id,
+      filename: input.filename,
+      mimeType: input.mimeType,
+      source: input.source ?? null,
+      status: input.status,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.documents.set(document.id, document);
+
+    return Promise.resolve(document);
+  }
+
+  findById(id: string): Promise<DocumentRecord | null> {
+    return Promise.resolve(this.documents.get(id) ?? null);
+  }
+
+  deleteAll(): Promise<void> {
+    this.documents.clear();
+
+    return Promise.resolve();
+  }
+
+  updateStatus(
+    id: string,
+    status: DocumentRecord['status'],
+  ): Promise<DocumentRecord> {
+    const document = this.documents.get(id);
+
+    if (!document) {
+      throw new Error(`Document ${id} not found`);
+    }
+
+    const updated = {
+      ...document,
+      status,
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.documents.set(id, updated);
+
+    return Promise.resolve(updated);
+  }
+}

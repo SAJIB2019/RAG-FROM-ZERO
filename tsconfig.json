@@ -15,7 +15,7 @@
     "moduleResolution": "nodenext",
     "esModuleInterop": true,
     "isolatedModules": true,
-    "types": ["node", "jest"]
+    "types": ["node", "jest", "multer"]
   },
   "include": ["src", "test"]
 }

@@ -1,15 +1,15 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
-import { seconds, ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
 import { ApiKeyGuard } from './auth/api-key.guard';
 import { validateEnv } from './config/env.schema';
+import { RateLimitGuard } from './common/guards/rate-limit.guard';
+import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
 import { DatabaseModule } from './database/database.module';
 import { DocumentsModule } from './documents/documents.module';
 import { HealthModule } from './health/health.module';
 import { MetricsModule } from './metrics/metrics.module';
-import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
 import { QueryModule } from './query/query.module';
 
 @Module({
@@ -18,18 +18,6 @@ import { QueryModule } from './query/query.module';
       isGlobal: true,
       envFilePath: '.env',
       validate: validateEnv,
-    }),
-    ThrottlerModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => [
-        {
-          ttl: seconds(
-            configService.getOrThrow<number>('THROTTLE_TTL_SECONDS'),
-          ),
-          limit: configService.getOrThrow<number>('THROTTLE_LIMIT'),
-        },
-      ],
     }),
     HealthModule,
     MetricsModule,
@@ -40,7 +28,7 @@ import { QueryModule } from './query/query.module';
   providers: [
     {
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: RateLimitGuard,
     },
     {
       provide: APP_GUARD,

@@ -34,6 +34,11 @@ export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   CORS_ORIGIN: z.string().default('*'),
   REQUEST_BODY_LIMIT: z.string().default('1mb'),
+  UPLOAD_MAX_FILE_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 1024 * 1024),
   THROTTLE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
   THROTTLE_LIMIT: z.coerce.number().int().positive().default(60),
   METRICS_API_KEY: z.string().optional().default(''),
