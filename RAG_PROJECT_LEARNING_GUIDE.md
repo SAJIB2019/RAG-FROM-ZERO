@@ -4,7 +4,7 @@
 
 ## 1. What This RAG Project Does
 
-This project is a NestJS backend for a small but real Retrieval-Augmented Generation system. Users send document text to the API, the system stores that document, splits it into smaller searchable chunks, creates embeddings for those chunks, stores the vectors in PostgreSQL with pgvector, and later answers user questions by retrieving relevant chunks and sending them to an LLM.
+This project is a NestJS backend for a small but real Retrieval-Augmented Generation system. Users can either send document text as JSON or upload supported document files to the API. The system extracts text, stores the document, splits it into smaller searchable chunks, creates embeddings for those chunks, stores the vectors in PostgreSQL with pgvector, and later answers user questions by retrieving relevant chunks and sending them to an LLM.
 
 The product-level problem is:
 
@@ -14,7 +14,12 @@ They want to ask questions.
 The LLM should answer from those documents instead of guessing from general training data.
 ```
 
-The current project works with text submitted through JSON, not real binary file uploads yet. The DTO accepts `application/pdf`, `text/plain`, and `text/markdown` MIME types, but the API receives a `content` string directly. There is no actual PDF parser, DOCX parser, page extraction, or file storage yet.
+The current project now supports two ingestion paths:
+
+- `POST /api/documents` accepts JSON text content.
+- `POST /api/documents/upload` accepts `multipart/form-data` with a file field named `file`.
+
+The upload path extracts text from PDF, DOCX, XLSX, CSV, TXT, Markdown, JSON, and HTML files. Legacy binary `.doc` and `.xls` are intentionally not supported because safe production support usually requires a sandboxed conversion service such as LibreOffice in an isolated worker/container.
 
 RAG is used because a normal LLM call does not know the user-uploaded document content. This project first retrieves relevant document chunks, then gives those chunks to the LLM as context.
 
@@ -26,9 +31,14 @@ Current implementation:
                     INGESTION PIPELINE
 
 POST /api/documents
+or
+POST /api/documents/upload
    |
    v
-DocumentsController.create
+DocumentsController.create / DocumentsController.upload
+   |
+   v
+DocumentFileExtractorService.extract (upload path only)
    |
    v
 DocumentsService.create
@@ -92,10 +102,16 @@ LlmProvider.generateAnswer
 answer + deterministic source metadata
 ```
 
+Stages that now exist:
+
+- Real multipart file upload.
+- Text extraction for PDF, DOCX, XLSX, CSV, TXT, Markdown, JSON, and HTML.
+
 Stages that do not currently exist:
 
-- Real file upload.
-- Real PDF/DOCX parsing.
+- Legacy `.doc` and `.xls` conversion.
+- Object storage for original uploaded binaries.
+- Page-aware PDF citations.
 - Semantic chunking.
 - Query rewriting.
 - Conversation memory.
@@ -131,7 +147,34 @@ Validation behavior:
 - `content` is required, trimmed, max 200000 characters.
 - `source` is optional, trimmed, max 2048 characters.
 
-Important limitation: even if `mimeType` is `application/pdf`, no PDF file is parsed. The system trusts the submitted `content` string.
+The JSON endpoint is still useful for tests, simple text ingestion, and programmatic ingestion where another system already extracted text.
+
+Upload endpoint:
+
+```bash
+curl -X POST http://localhost:3000/api/documents/upload \
+  -H "x-api-key: YOUR_API_KEY" \
+  -F "file=@/path/to/document.pdf" \
+  -F "source=manual-upload"
+```
+
+Upload files:
+
+- Controller: `DocumentsController.upload`
+- DTO: `src/documents/dto/upload-document.dto.ts`
+- Extractor: `src/documents/document-file-extractor.service.ts`
+- File size limit: `UPLOAD_MAX_FILE_BYTES`
+
+Supported upload types:
+
+- PDF: `pdf-parse`
+- DOCX: `mammoth`
+- XLSX: `read-excel-file`
+- CSV/TXT/Markdown: UTF-8 text
+- JSON: normalized pretty JSON when valid
+- HTML: basic script/style/tag stripping
+
+Important limitation: uploaded binaries are not stored in object storage. The system extracts text and stores that extracted text in `documents.raw_text`.
 
 ### Stage 2 — Document Creation
 
@@ -143,6 +186,9 @@ Flow:
 
 ```text
 DocumentsController.create
+or DocumentsController.upload
+   ↓
+DocumentFileExtractorService.extract (upload path only)
    ↓
 DocumentsService.create
    ↓
@@ -209,7 +255,13 @@ Queue behavior:
 - exponential backoff starting at 1000 ms.
 - keeps last 100 completed jobs and last 100 failed jobs.
 
-Ingestion is asynchronous and background-job based.
+Ingestion is asynchronous and background-job based in normal runtime.
+
+Test behavior:
+
+- In `NODE_ENV=test`, `QueuesModule` uses a no-op queue provider instead of BullMQ.
+- This keeps HTTP e2e tests independent from Redis.
+- Production and development still use BullMQ + Redis.
 
 ### Stage 5 — Worker Processing
 
@@ -549,24 +601,26 @@ Important issue: debug retrieval data is returned in normal API responses. This 
 
 ## 5. Technology Stack
 
-| Area | Technology | Where Used | Why It Is Used |
-| --- | --- | --- | --- |
-| API | NestJS | `src/main.ts`, `src/app.module.ts`, controllers/modules | Structured TypeScript backend |
-| Validation | class-validator, class-transformer | DTOs in `src/documents/dto`, `src/query/dto` | Request validation and trimming |
-| Env validation | Zod | `src/config/env.schema.ts` | Typed runtime configuration |
-| SQL DB | PostgreSQL | `docker-compose.yml`, migrations, `DatabaseService`, Prisma | Stores documents and chunks |
-| Vector DB | pgvector | migrations 003/005, `QueryRepository.vectorSearch` | Stores/searches chunk embeddings |
-| ORM/query layer | Prisma 7 | `src/prisma`, `src/query/query.repository.ts` | Query-side raw SQL with Prisma connection |
-| Raw SQL writes | pg | `src/database/database.service.ts`, `DocumentsRepository` | Writes and worker updates |
-| Queue | BullMQ + Redis | `src/queues`, `src/worker` | Async document processing |
-| Embeddings | Fake or OpenAI-compatible HTTP | `src/embeddings` | Converts text to vectors |
-| LLM | Fake or OpenAI-compatible HTTP | `src/llm` | Generates answer from retrieved context |
-| Keyword search | PostgreSQL full-text search | migration 004, `keywordSearch` | Exact/lexical retrieval |
-| Hybrid search | Custom RRF | `src/query/hybrid-search.ts` | Combines vector and keyword results |
-| Metrics | `@prometheus-io/client` | `src/metrics` | Prometheus-compatible monitoring |
-| Security middleware | Helmet, API key guard, throttler | `src/main.ts`, `src/auth`, `src/app.module.ts` | Basic hardening |
-| Testing | Jest, Supertest | `*.spec.ts`, `test/app.e2e-spec.ts` | Unit and e2e tests |
-| Deployment | Docker, Compose, Nginx template | `Dockerfile`, `docker-compose.prod.yml`, `deploy/nginx/rag.conf` | Runtime packaging and TLS proxy template |
+| Area                | Technology                                       | Where Used                                                          | Why It Is Used                                      |
+| ------------------- | ------------------------------------------------ | ------------------------------------------------------------------- | --------------------------------------------------- |
+| API                 | NestJS                                           | `src/main.ts`, `src/app.module.ts`, controllers/modules             | Structured TypeScript backend                       |
+| Validation          | class-validator, class-transformer               | DTOs in `src/documents/dto`, `src/query/dto`                        | Request validation and trimming                     |
+| Env validation      | Zod                                              | `src/config/env.schema.ts`                                          | Typed runtime configuration                         |
+| File upload         | Multer via Nest platform-express                 | `DocumentsController.upload`, `DocumentsModule`                     | Multipart upload handling                           |
+| File extraction     | `pdf-parse`, `mammoth`, `read-excel-file`        | `DocumentFileExtractorService`                                      | Extract text from PDF/DOCX/XLSX and text-like files |
+| SQL DB              | PostgreSQL                                       | `docker-compose.yml`, migrations, `DatabaseService`, Prisma         | Stores documents and chunks                         |
+| Vector DB           | pgvector                                         | migrations 003/005, `QueryRepository.vectorSearch`                  | Stores/searches chunk embeddings                    |
+| ORM/query layer     | Prisma 7                                         | `src/prisma`, `src/query/query.repository.ts`                       | Query-side raw SQL with Prisma connection           |
+| Raw SQL writes      | pg                                               | `src/database/database.service.ts`, `DocumentsRepository`           | Writes and worker updates                           |
+| Queue               | BullMQ + Redis                                   | `src/queues`, `src/worker`                                          | Async document processing                           |
+| Embeddings          | Fake or OpenAI-compatible HTTP                   | `src/embeddings`                                                    | Converts text to vectors                            |
+| LLM                 | Fake or OpenAI-compatible HTTP                   | `src/llm`                                                           | Generates answer from retrieved context             |
+| Keyword search      | PostgreSQL full-text search                      | migration 004, `keywordSearch`                                      | Exact/lexical retrieval                             |
+| Hybrid search       | Custom RRF                                       | `src/query/hybrid-search.ts`                                        | Combines vector and keyword results                 |
+| Metrics             | `@prometheus-io/client`                          | `src/metrics`                                                       | Prometheus-compatible monitoring                    |
+| Security middleware | Helmet, API key guard, internal rate-limit guard | `src/main.ts`, `src/auth`, `src/common/guards`, `src/app.module.ts` | Basic hardening                                     |
+| Testing             | Jest, Supertest                                  | `*.spec.ts`, `test/app.e2e-spec.ts`                                 | Unit and e2e tests                                  |
+| Deployment          | Docker, Compose, Nginx template                  | `Dockerfile`, `docker-compose.prod.yml`, `deploy/nginx/rag.conf`    | Runtime packaging and TLS proxy template            |
 
 Technologies not currently used:
 
@@ -613,7 +667,7 @@ load-tests/
 
 Directory responsibilities:
 
-- `src/documents`: document API, service, and SQL write repository.
+- `src/documents`: document API, upload extraction, service, and SQL write repository.
 - `src/worker`: background ingestion worker.
 - `src/ingestion`: text cleaning and chunking utilities.
 - `src/embeddings`: embedding abstraction and provider implementations.
@@ -623,7 +677,7 @@ Directory responsibilities:
 - `src/prisma`: Prisma Client service for query-side raw SQL.
 - `src/queues`: BullMQ queue registration and enqueue service.
 - `src/auth`: global API-key guard.
-- `src/common`: request ID, logging interceptor, exception filter.
+- `src/common`: request ID, logging interceptor, exception filter, internal rate-limit guard.
 - `src/metrics`: Prometheus metrics endpoint and metrics service.
 - `migrations`: real database schema changes via node-pg-migrate.
 - `prisma`: Prisma schema for generated query client.
@@ -660,73 +714,109 @@ Current structure is good for a learning MVP. For a larger system, retrieval, ge
    - Understand Prisma connection for query reads.
 
 9. `src/documents/documents.controller.ts`
-   - Start the ingestion flow.
+   - Start the JSON and multipart upload ingestion flows.
 
-10. `src/documents/documents.service.ts`
+10. `src/documents/document-file-extractor.service.ts`
+    - Understand upload file type detection and text extraction.
+
+11. `src/documents/documents.service.ts`
     - See document creation and queue handoff.
 
-11. `src/documents/documents.repository.ts`
+12. `src/documents/documents.repository.ts`
     - See document/chunk writes.
 
-12. `src/queues/documents-queue.service.ts`
+13. `src/queues/documents-queue.service.ts`
     - Understand job creation.
 
-13. `src/worker/document-processing.processor.ts`
+14. `src/worker/document-processing.processor.ts`
     - Read the whole ingestion pipeline.
 
-14. `src/ingestion/text-cleaner.ts`
+15. `src/ingestion/text-cleaner.ts`
     - Understand preprocessing.
 
-15. `src/ingestion/text-chunker.ts`
+16. `src/ingestion/text-chunker.ts`
     - Understand chunk boundaries and overlap.
 
-16. `src/embeddings/*`
+17. `src/embeddings/*`
     - Understand provider abstraction and vector generation.
 
-17. `src/query/query.controller.ts`
+18. `src/query/query.controller.ts`
     - Start the QA flow.
 
-18. `src/query/query.service.ts`
+19. `src/query/query.service.ts`
     - See query embedding, retrieval, fusion, context, LLM.
 
-19. `src/query/query.repository.ts`
+20. `src/query/query.repository.ts`
     - Study vector SQL and full-text SQL.
 
-20. `src/query/hybrid-search.ts`
+21. `src/query/hybrid-search.ts`
     - Understand RRF.
 
-21. `src/query/context-builder.ts`
+22. `src/query/context-builder.ts`
     - Understand source markers and citations.
 
-22. `src/llm/*`
+23. `src/llm/*`
     - Understand prompt construction and LLM HTTP call.
 
-23. `src/auth/api-key.guard.ts`
+24. `src/auth/api-key.guard.ts`
     - Understand authentication limits.
 
-24. `src/metrics/*`, `src/health/*`, `src/common/*`
+25. `src/common/guards/rate-limit.guard.ts`
+    - Understand the internal in-memory rate limiter.
+
+26. `src/metrics/*`, `src/health/*`, `src/common/*`
     - Understand operational behavior.
 
-25. `test/app.e2e-spec.ts`, `src/query/*.spec.ts`, `src/auth/*.spec.ts`
+27. `test/app.e2e-spec.ts`, `src/query/*.spec.ts`, `src/auth/*.spec.ts`, `src/documents/*.spec.ts`
     - Understand how behavior is verified.
 
 ## 8. Document Loading
 
-Current implementation does not have a real document loader.
+Current implementation has two document loading paths.
 
-Supported MIME values in validation:
+JSON text path:
 
 - `application/pdf`
 - `text/plain`
 - `text/markdown`
 
-Actual behavior:
+Actual JSON behavior:
 
 - API accepts a `content` string.
 - That string becomes `documents.raw_text`.
-- No file upload middleware is used.
-- No PDF parser exists.
-- No DOCX parser exists.
+
+Multipart upload path:
+
+- API accepts a `file` field.
+- Multer stores the upload in memory.
+- `DocumentFileExtractorService.extract` detects file kind by MIME type or extension.
+- Extracted text becomes `documents.raw_text`.
+
+Supported upload extensions:
+
+- `.pdf`
+- `.docx`
+- `.xlsx`
+- `.csv`
+- `.txt`
+- `.md`
+- `.markdown`
+- `.json`
+- `.html`
+- `.htm`
+
+Unsupported:
+
+- Legacy `.doc`.
+- Legacy `.xls`.
+- Archives such as `.zip`.
+- Images without OCR.
+
+Still missing:
+
+- Original file storage.
+- Virus/malware scanning.
+- OCR for scanned PDFs/images.
 - No URL/web loader exists.
 - No page metadata exists.
 
@@ -1162,21 +1252,21 @@ Current protection is basic prompt instruction, not strong grounding enforcement
 
 ## 24. API Layer
 
-| Endpoint | Method | Purpose | Main Service |
-| --- | --- | --- | --- |
-| `/api/documents` | POST | Create document and enqueue ingestion | `DocumentsService` |
-| `/api/documents/:id` | GET | Return document metadata | `DocumentsService` |
-| `/api/query` | POST | Ask a RAG question | `QueryService` |
-| `/api/health` | GET | Liveness | `HealthController` |
-| `/api/health/ready` | GET | Postgres/Redis readiness | `HealthService` |
-| `/api/metrics` | GET | Prometheus metrics | `MetricsService` |
+| Endpoint                | Method | Purpose                                                                 | Main Service       |
+| ----------------------- | ------ | ----------------------------------------------------------------------- | ------------------ |
+| `/api/documents`        | POST   | Create document and enqueue ingestion                                   | `DocumentsService` |
+| `/api/documents/upload` | POST   | Upload supported file, extract text, create document, enqueue ingestion | `DocumentsService` |
+| `/api/documents/:id`    | GET    | Return document metadata                                                | `DocumentsService` |
+| `/api/query`            | POST   | Ask a RAG question                                                      | `QueryService`     |
+| `/api/health`           | GET    | Liveness                                                                | `HealthController` |
+| `/api/health/ready`     | GET    | Postgres/Redis readiness                                                | `HealthService`    |
+| `/api/metrics`          | GET    | Prometheus metrics                                                      | `MetricsService`   |
 
 Missing endpoints:
 
 - list documents.
 - delete document.
 - re-index document.
-- upload real files.
 - get processing job details.
 - tenant/user management.
 
@@ -1337,19 +1427,20 @@ Existing:
 - Helmet.
 - CORS config.
 - request body limit.
+- upload file size limit.
 - DTO validation.
-- throttling.
+- internal in-memory rate limiting via `RateLimitGuard`.
 - production rejects fake LLM/embedding providers.
 
 RAG-specific issues:
 
 - No tenant/user isolation.
 - No prompt-injection defense for document text.
-- No malicious document scanning.
+- No malicious uploaded file scanning.
 - No PII handling.
 - `debug` returns retrieved chunks and context.
 - no per-document authorization.
-- no upload file scanning because there is no file upload yet.
+- uploaded original files are not retained for audit/reprocessing.
 
 Prompt injection example:
 
@@ -1525,12 +1616,23 @@ mimeType: text/markdown
 content: "Customers can request a refund within 30 days."
 ```
 
+Or the user uploads:
+
+```text
+POST /api/documents/upload
+file: refund-policy.pdf
+source: manual-upload
+```
+
 Ingestion:
 
 ```text
 POST /api/documents
+or POST /api/documents/upload
    ↓
-DocumentsController.create
+DocumentsController.create / DocumentsController.upload
+   ↓
+DocumentFileExtractorService.extract (upload path only)
    ↓
 DocumentsService.create
    ↓
@@ -1603,17 +1705,17 @@ Recommended improvement: choose explicit boundaries: raw SQL repository layer fo
 
 ### RAG Design Problems
 
-Problem: no real document parser.
+Problem: parser coverage is still incomplete.
 
-Location: `CreateDocumentDto.content`.
+Location: resolved for common files by `DocumentFileExtractorService`.
 
-Current behavior: accepts raw text only.
+Current behavior: JSON accepts raw text; upload endpoint extracts PDF, DOCX, XLSX, CSV, text, Markdown, JSON, and HTML.
 
-Why it matters: PDF MIME support is misleading.
+Remaining issue: legacy `.doc`, `.xls`, scanned PDFs, image OCR, URL loaders, and page-aware citation metadata are still missing.
 
-Potential impact: users expect PDF upload but system cannot parse it.
+Potential impact: users may upload unsupported files or expect page-level citations that the system cannot provide.
 
-Recommended improvement: add file upload, object storage, parser pipeline.
+Recommended improvement: add object storage, parser metadata, page numbers, OCR, malware scanning, and sandboxed legacy file conversion.
 
 ### Retrieval Problems
 
@@ -1719,7 +1821,7 @@ Problem: no integration test for worker completing embeddings.
 
 Location: tests.
 
-Current behavior: e2e tests create documents but do not process full worker lifecycle.
+Current behavior: HTTP e2e tests override document persistence/query behavior in memory and use a no-op queue in `NODE_ENV=test`. This makes `npm run test:e2e` reliable without Docker/Postgres/Redis, but it does not test the real worker lifecycle.
 
 Why it matters: ingestion pipeline can break unnoticed.
 
@@ -1731,14 +1833,15 @@ Recommended improvement: add worker integration test with fake provider and Redi
 
 - Clear Nest module separation.
 - Async ingestion with BullMQ.
+- Multipart upload and extraction for common document formats.
 - Document status lifecycle.
 - Embedding and LLM provider abstractions.
 - Hybrid search exists early.
 - Context builder has source markers.
 - PostgreSQL + pgvector keeps metadata and vectors together.
 - Production env validation prevents fake providers in production.
-- API key guard, throttling, request IDs, metrics, health checks exist.
-- Unit tests cover hybrid search, context builder, and API key guard.
+- API key guard, internal rate limiting, request IDs, metrics, health checks exist.
+- Unit tests cover hybrid search, context builder, API key guard, rate-limit guard, and document extraction.
 
 ## 40. Proposed Industry-Standard RAG Architecture
 
@@ -1788,17 +1891,17 @@ Why this design:
 
 ## 41. Current vs Proposed Architecture
 
-| Concern | Current | Proposed | Reason |
-| --- | --- | --- | --- |
-| Ingestion | worker directly cleans/chunks/embeds | ingestion service with loader/preprocessor/chunker stages | easier testing |
-| Retrieval | query repository does vector + keyword | separate retrievers + hybrid retriever | clearer retrieval tuning |
-| Prompt | inline in LLM provider | prompt builder | easier prompt testing/versioning |
-| Context | `src/query/context-builder.ts` | generation context builder | context is part of generation |
-| Vector DB | pgvector raw SQL | keep pgvector with repository abstraction | good fit |
-| API | controller per feature | keep | already appropriate |
-| Config | Zod env schema | keep | good production pattern |
-| Evaluation | absent | `evaluation/` | needed for RAG quality |
-| Observability | metrics/logging basic | add provider/retrieval/queue metrics | better debugging |
+| Concern       | Current                                                  | Proposed                                                  | Reason                           |
+| ------------- | -------------------------------------------------------- | --------------------------------------------------------- | -------------------------------- |
+| Ingestion     | controller extracts uploads, worker cleans/chunks/embeds | ingestion service with loader/preprocessor/chunker stages | easier testing                   |
+| Retrieval     | query repository does vector + keyword                   | separate retrievers + hybrid retriever                    | clearer retrieval tuning         |
+| Prompt        | inline in LLM provider                                   | prompt builder                                            | easier prompt testing/versioning |
+| Context       | `src/query/context-builder.ts`                           | generation context builder                                | context is part of generation    |
+| Vector DB     | pgvector raw SQL                                         | keep pgvector with repository abstraction                 | good fit                         |
+| API           | controller per feature                                   | keep                                                      | already appropriate              |
+| Config        | Zod env schema                                           | keep                                                      | good production pattern          |
+| Evaluation    | absent                                                   | `evaluation/`                                             | needed for RAG quality           |
+| Observability | metrics/logging basic                                    | add provider/retrieval/queue metrics                      | better debugging                 |
 
 ## 42. Step-by-Step RAG Rewrite Roadmap
 
@@ -1835,9 +1938,9 @@ Step 4: Document model.
 
 Step 5: Document input.
 
-- Goal: accept text first, file upload later.
-- Files: document DTO/controller.
-- Do not copy yet: PDF parsing.
+- Goal: accept text first, then add multipart upload.
+- Files: document DTO/controller, upload DTO, file extractor service.
+- Parser order: text/Markdown first, then PDF/DOCX/XLSX.
 
 Step 6: Text normalization.
 
@@ -1854,7 +1957,7 @@ Step 7: Chunker.
 At this point:
 
 ```text
-upload text → clean → chunks
+upload text or file → extract text → clean → chunks
 ```
 
 ### Phase 3 — Embeddings and Indexing
@@ -1930,8 +2033,8 @@ Add only after basic RAG works:
 
 - API key auth.
 - tenant filtering.
-- PDF parsing.
 - object storage.
+- OCR and page-aware parsing.
 - reranker.
 - query rewriting.
 - conversation memory.
@@ -1973,7 +2076,7 @@ Do not start with:
 
 - reranking.
 - conversation memory.
-- PDF parsing.
+- advanced parsing/OCR.
 - Docker.
 - metrics.
 
@@ -1997,8 +2100,8 @@ You should be able to inspect intermediate data: documents, chunks, embeddings, 
 
 Loader test:
 
-- Current project has no real loader.
-- Add one when file upload exists.
+- Existing `src/documents/document-file-extractor.service.spec.ts`.
+- Covers text, CSV fallback, JSON normalization, HTML stripping, empty file rejection, and unsupported file rejection.
 
 Chunking test:
 
@@ -2028,6 +2131,18 @@ RAG test:
 
 - Use fake LLM first.
 - Verify no-context fallback.
+
+HTTP e2e test:
+
+- Existing `test/app.e2e-spec.ts`.
+- Uses in-memory repository/query overrides.
+- Uses no-op queue in `NODE_ENV=test`.
+- Verifies health, JSON document creation, file upload, metadata fetch, and empty query response.
+
+Worker integration test:
+
+- Still missing.
+- Should run with real Postgres/Redis or testcontainers when you want to verify BullMQ + worker + embeddings end-to-end.
 
 Citation test:
 
@@ -2154,7 +2269,7 @@ Run unit tests.
 npm run test:e2e
 ```
 
-Run e2e tests; requires Postgres and Redis.
+Run HTTP e2e tests. Current e2e tests do not require Postgres or Redis because they use in-memory overrides and no-op queue behavior in `NODE_ENV=test`.
 
 ```bash
 npm run check
@@ -2177,36 +2292,37 @@ Run k6 load test if k6 is installed.
 
 ## 48. Environment Variables
 
-| Variable | Used In | Purpose | Required |
-| --- | --- | --- | --- |
-| `NODE_ENV` | config | runtime mode | yes |
-| `PORT` | `main.ts` | API port | yes |
-| `LOG_LEVEL` | `main.ts` | Nest log levels | yes |
-| `API_KEY` | `ApiKeyGuard` | protect API routes | production yes |
-| `METRICS_API_KEY` | `MetricsController` | protect metrics scrape | production yes |
-| `DATABASE_URL` | Prisma, migrations, scripts | DB connection string | yes |
-| `POSTGRES_HOST` | `DatabaseService` | Postgres host | yes |
-| `POSTGRES_PORT` | `DatabaseService` | Postgres port | yes |
-| `POSTGRES_DB` | `DatabaseService` | DB name | yes |
-| `POSTGRES_USER` | `DatabaseService` | DB user | yes |
-| `POSTGRES_PASSWORD` | `DatabaseService` | DB password | yes |
-| `POSTGRES_SSL` | `DatabaseService` | managed DB TLS | no |
-| `REDIS_HOST` | queues/health | Redis host | yes |
-| `REDIS_PORT` | queues/health | Redis port | yes |
-| `REDIS_PASSWORD` | queues/health | Redis password | no |
-| `REDIS_TLS` | queues/health | managed Redis TLS | no |
-| `EMBEDDING_PROVIDER` | `EmbeddingsModule` | fake or openai-compatible | yes |
-| `LLM_PROVIDER` | `LlmModule` | fake or openai-compatible | yes |
-| `OPENAI_COMPATIBLE_BASE_URL` | AI providers | provider base URL | provider-dependent |
-| `OPENAI_COMPATIBLE_API_KEY` | AI providers | provider key | provider-dependent |
-| `EMBEDDING_MODEL` | embedding provider | model name | yes |
-| `EMBEDDING_DIMENSIONS` | embeddings/db | vector dimensions | yes |
-| `LLM_MODEL` | LLM provider | chat model name | yes |
-| `OPENAI_COMPATIBLE_TIMEOUT_MS` | AI providers | HTTP timeout | yes |
-| `CORS_ORIGIN` | `main.ts` | allowed origins | yes |
-| `REQUEST_BODY_LIMIT` | `main.ts` | JSON body size | yes |
-| `THROTTLE_TTL_SECONDS` | throttler | rate limit window | yes |
-| `THROTTLE_LIMIT` | throttler | requests per window | yes |
+| Variable                       | Used In                                  | Purpose                     | Required           |
+| ------------------------------ | ---------------------------------------- | --------------------------- | ------------------ |
+| `NODE_ENV`                     | config                                   | runtime mode                | yes                |
+| `PORT`                         | `main.ts`                                | API port                    | yes                |
+| `LOG_LEVEL`                    | `main.ts`                                | Nest log levels             | yes                |
+| `API_KEY`                      | `ApiKeyGuard`                            | protect API routes          | production yes     |
+| `METRICS_API_KEY`              | `MetricsController`                      | protect metrics scrape      | production yes     |
+| `DATABASE_URL`                 | Prisma, migrations, scripts              | DB connection string        | yes                |
+| `POSTGRES_HOST`                | `DatabaseService`                        | Postgres host               | yes                |
+| `POSTGRES_PORT`                | `DatabaseService`                        | Postgres port               | yes                |
+| `POSTGRES_DB`                  | `DatabaseService`                        | DB name                     | yes                |
+| `POSTGRES_USER`                | `DatabaseService`                        | DB user                     | yes                |
+| `POSTGRES_PASSWORD`            | `DatabaseService`                        | DB password                 | yes                |
+| `POSTGRES_SSL`                 | `DatabaseService`                        | managed DB TLS              | no                 |
+| `REDIS_HOST`                   | queues/health                            | Redis host                  | yes                |
+| `REDIS_PORT`                   | queues/health                            | Redis port                  | yes                |
+| `REDIS_PASSWORD`               | queues/health                            | Redis password              | no                 |
+| `REDIS_TLS`                    | queues/health                            | managed Redis TLS           | no                 |
+| `EMBEDDING_PROVIDER`           | `EmbeddingsModule`                       | fake or openai-compatible   | yes                |
+| `LLM_PROVIDER`                 | `LlmModule`                              | fake or openai-compatible   | yes                |
+| `OPENAI_COMPATIBLE_BASE_URL`   | AI providers                             | provider base URL           | provider-dependent |
+| `OPENAI_COMPATIBLE_API_KEY`    | AI providers                             | provider key                | provider-dependent |
+| `EMBEDDING_MODEL`              | embedding provider                       | model name                  | yes                |
+| `EMBEDDING_DIMENSIONS`         | embeddings/db                            | vector dimensions           | yes                |
+| `LLM_MODEL`                    | LLM provider                             | chat model name             | yes                |
+| `OPENAI_COMPATIBLE_TIMEOUT_MS` | AI providers                             | HTTP timeout                | yes                |
+| `CORS_ORIGIN`                  | `main.ts`                                | allowed origins             | yes                |
+| `REQUEST_BODY_LIMIT`           | `main.ts`                                | JSON body size              | yes                |
+| `UPLOAD_MAX_FILE_BYTES`        | `DocumentsModule`, `DocumentsController` | multipart upload size limit | yes                |
+| `THROTTLE_TTL_SECONDS`         | `RateLimitGuard`                         | rate limit window           | yes                |
+| `THROTTLE_LIMIT`               | `RateLimitGuard`                         | requests per window         | yes                |
 
 ## 49. Rewrite Checklist
 
@@ -2215,6 +2331,8 @@ Run k6 load test if k6 is installed.
 - [ ] Environment configuration works.
 - [ ] Database migrations work.
 - [ ] Document creation works.
+- [ ] Multipart file upload works.
+- [ ] File extraction works for supported formats.
 - [ ] Raw text is stored.
 - [ ] Queue job is created.
 - [ ] Worker runs.
