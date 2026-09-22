@@ -32,6 +32,27 @@ export const envSchema = z.object({
     .positive()
     .default(30000),
   DATABASE_URL: z.string().min(1),
+  SEARCH_BACKEND: z
+    .enum(['postgres', 'qdrant-elasticsearch'])
+    .default('postgres'),
+  QDRANT_URL: z.string().url().default('http://localhost:6333'),
+  QDRANT_API_KEY: z.string().default(''),
+  QDRANT_COLLECTION: z
+    .string()
+    .regex(/^[a-zA-Z0-9_-]+$/)
+    .default('rag_chunks'),
+  ELASTICSEARCH_URL: z.string().url().default('http://localhost:9200'),
+  ELASTICSEARCH_API_KEY: z.string().default(''),
+  ELASTICSEARCH_INDEX: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9_-]*$/)
+    .default('rag-chunks'),
+  OTEL_ENABLED: z.enum(['true', 'false']).default('false'),
+  OTEL_SERVICE_NAME: z.string().min(1).default('rag-from-zero'),
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: z
+    .string()
+    .url()
+    .default('http://localhost:4318/v1/traces'),
   CORS_ORIGIN: z.string().default('*'),
   REQUEST_BODY_LIMIT: z.string().default('1mb'),
   UPLOAD_MAX_FILE_BYTES: z.coerce

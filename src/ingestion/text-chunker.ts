@@ -4,38 +4,33 @@ export type TextChunk = {
   tokenCount: number;
 };
 
-export function chunkText(
+export async function chunkText(
   text: string,
   options = {
-    maxCharacters: 800,
-    overlapCharacters: 120,
+    chunkSize: 200,
+    chunkOverlap: 30,
   },
-): TextChunk[] {
-  const chunks: TextChunk[] = [];
-  let start = 0;
-
-  while (start < text.length) {
-    const end = Math.min(start + options.maxCharacters, text.length);
-    const content = text.slice(start, end).trim();
-
-    if (content.length > 0) {
-      chunks.push({
-        chunkIndex: chunks.length,
-        content,
-        tokenCount: estimateTokenCount(content),
-      });
-    }
-
-    if (end === text.length) {
-      break;
-    }
-
-    start = Math.max(0, end - options.overlapCharacters);
+): Promise<TextChunk[]> {
+  if (
+    !Number.isInteger(options.chunkSize) ||
+    options.chunkSize <= 0 ||
+    !Number.isInteger(options.chunkOverlap) ||
+    options.chunkOverlap < 0 ||
+    options.chunkOverlap >= options.chunkSize
+  ) {
+    throw new Error(
+      'Chunk size must be positive and overlap must be smaller than chunk size',
+    );
   }
-
-  return chunks;
-}
-
-function estimateTokenCount(text: string): number {
-  return Math.ceil(text.length / 4);
+  const { SentenceSplitter } = await import('@llamaindex/core/node-parser');
+  const splitter = new SentenceSplitter(options);
+  return splitter
+    .splitText(text)
+    .map((content) => content.trim())
+    .filter(Boolean)
+    .map((content, chunkIndex) => ({
+      chunkIndex,
+      content,
+      tokenCount: splitter.tokenSize(content),
+    }));
 }

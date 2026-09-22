@@ -1,7 +1,11 @@
 # RAG From Zero
 
 Production-shaped NestJS RAG backend with PostgreSQL, pgvector, Redis, BullMQ,
-Prisma query reads, hybrid retrieval, and OpenAI-compatible providers.
+Prisma query reads, LangChain orchestration, LlamaIndex chunking, hybrid retrieval,
+and OpenAI-compatible providers. Qdrant + Elasticsearch retrieval, OpenTelemetry
+tracing, and a Python RAGAS evaluation runner are available.
+
+See [RAG integrations](docs/rag-integrations.md) for setup, migration, and evaluation.
 
 ## Local Development
 

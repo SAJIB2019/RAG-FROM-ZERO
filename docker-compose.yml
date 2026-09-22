@@ -1,4 +1,24 @@
 services:
+  qdrant:
+    image: qdrant/qdrant:v1.17.0
+    profiles: ['rag']
+    ports: ['127.0.0.1:6333:6333']
+    volumes: ['qdrant_data:/qdrant/storage']
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.3.8
+    profiles: ['rag']
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: 'false'
+      ES_JAVA_OPTS: '-Xms512m -Xmx512m'
+    ports: ['127.0.0.1:9200:9200']
+    volumes: ['elasticsearch_data:/usr/share/elasticsearch/data']
+  otel-collector:
+    image: otel/opentelemetry-collector:0.145.0
+    profiles: ['rag']
+    command: ['--config=/etc/otelcol/config.yaml']
+    ports: ['127.0.0.1:4318:4318']
+    volumes: ['./deploy/otel/collector.yaml:/etc/otelcol/config.yaml:ro']
   postgres:
     image: pgvector/pgvector:pg16
     container_name: rag-postgres
@@ -28,5 +48,7 @@ services:
       timeout: 5s
       retries: 10
 volumes:
+  qdrant_data:
+  elasticsearch_data:
   postgres_data:
   redis_data:

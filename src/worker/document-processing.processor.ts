@@ -9,6 +9,8 @@ import { cleanText } from '../ingestion/text-cleaner';
 import { chunkText } from '../ingestion/text-chunker';
 import { ProcessDocumentJobData } from '../queues/documents-queue.service';
 import { DOCUMENT_PROCESSING_QUEUE } from '../queues/queue.constants';
+import { SearchService } from '../search/search.service';
+import { traced } from '../telemetry/traced';
 
 @Injectable()
 @Processor(DOCUMENT_PROCESSING_QUEUE)
@@ -19,11 +21,18 @@ export class DocumentProcessingProcessor extends WorkerHost {
     private readonly documentsRepository: DocumentsRepository,
     @Inject(EMBEDDING_PROVIDER)
     private readonly embeddingProvider: EmbeddingProvider,
+    private readonly search: SearchService,
   ) {
     super();
   }
 
   async process(job: Job<ProcessDocumentJobData>): Promise<void> {
+    return traced('rag.ingest', () => this.processDocument(job));
+  }
+
+  private async processDocument(
+    job: Job<ProcessDocumentJobData>,
+  ): Promise<void> {
     this.logger.log(`Processing document ${job.data.documentId}`);
 
     try {
@@ -45,7 +54,9 @@ export class DocumentProcessingProcessor extends WorkerHost {
       await job.updateProgress(25);
 
       const cleanedText = cleanText(rawText);
-      const chunks = chunkText(cleanedText);
+      const chunks = await chunkText(cleanedText);
+      if (chunks.length === 0)
+        throw new Error('Document contains no indexable text');
 
       await job.updateProgress(60);
 
@@ -73,6 +84,9 @@ export class DocumentProcessingProcessor extends WorkerHost {
         });
       }
 
+      await traced('rag.index', () =>
+        this.search.syncDocument(job.data.documentId),
+      );
       await this.documentsRepository.updateStatus(
         job.data.documentId,
         'completed',

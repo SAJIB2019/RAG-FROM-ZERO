@@ -11,6 +11,7 @@ import { DocumentsModule } from './documents/documents.module';
 import { HealthModule } from './health/health.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { QueryModule } from './query/query.module';
+import { TelemetryModule } from './telemetry/telemetry.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { QueryModule } from './query/query.module';
     DocumentsModule,
     DatabaseModule,
     QueryModule,
+    TelemetryModule,
   ],
   providers: [
     {

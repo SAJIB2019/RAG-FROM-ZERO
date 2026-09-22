@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
 import { DatabaseService } from '../database/database.service';
+import { SearchService } from '../search/search.service';
 
 type DependencyStatus = {
   status: 'up' | 'down';
@@ -17,6 +18,7 @@ export class HealthService implements OnModuleDestroy {
   constructor(
     private readonly databaseService: DatabaseService,
     configService: ConfigService,
+    private readonly search: SearchService,
   ) {
     this.redis = new Redis({
       host: configService.getOrThrow<string>('REDIS_HOST'),
@@ -34,19 +36,28 @@ export class HealthService implements OnModuleDestroy {
     checks: {
       postgres: DependencyStatus;
       redis: DependencyStatus;
+      search?: DependencyStatus;
     };
   }> {
-    const [postgres, redis] = await Promise.all([
+    const [postgres, redis, search] = await Promise.all([
       this.checkPostgres(),
       this.checkRedis(),
+      this.search.enabled
+        ? this.measure(() => this.search.checkReadiness())
+        : Promise.resolve(undefined),
     ]);
 
     return {
       status:
-        postgres.status === 'up' && redis.status === 'up' ? 'ok' : 'error',
+        postgres.status === 'up' &&
+        redis.status === 'up' &&
+        search?.status !== 'down'
+          ? 'ok'
+          : 'error',
       checks: {
         postgres,
         redis,
+        ...(search ? { search } : {}),
       },
     };
   }

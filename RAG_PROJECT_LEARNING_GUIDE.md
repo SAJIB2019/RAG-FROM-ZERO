@@ -622,14 +622,19 @@ Important issue: debug retrieval data is returned in normal API responses. This 
 | Testing             | Jest, Supertest                                  | `*.spec.ts`, `test/app.e2e-spec.ts`                                 | Unit and e2e tests                                  |
 | Deployment          | Docker, Compose, Nginx template                  | `Dockerfile`, `docker-compose.prod.yml`, `deploy/nginx/rag.conf`    | Runtime packaging and TLS proxy template            |
 
-Technologies not currently used:
+Additional integrations (September 2026):
 
-- LangChain.
-- LlamaIndex.
-- Pinecone/Qdrant/Weaviate/Chroma.
-- Elasticsearch.
-- RAGAS/DeepEval.
-- LangSmith/Langfuse/Phoenix/OpenTelemetry.
+- LangChain orchestrates embedding, hybrid retrieval, and answer generation.
+- LlamaIndex performs token-aware sentence chunking (200 tokens, 30-token overlap).
+- Qdrant and Elasticsearch provide optional vector and lexical retrieval with
+  `SEARCH_BACKEND=qdrant-elasticsearch`; PostgreSQL remains the authoritative store.
+- RAGAS evaluates real API responses using the Python runner in `evaluation/`.
+- OpenTelemetry exports query and ingestion stage spans over OTLP/HTTP.
+
+See [RAG integration setup](docs/rag-integrations.md). Earlier walkthroughs in this
+guide describe the original PostgreSQL retrieval and character-based chunking;
+the linked integration guide documents the updated pipeline. Pinecone, Weaviate,
+Chroma, DeepEval, LangSmith, Langfuse, and Phoenix are not integrated.
 
 ## 6. Repository Structure
 

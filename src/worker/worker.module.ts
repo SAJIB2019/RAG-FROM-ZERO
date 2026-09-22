@@ -6,6 +6,8 @@ import { DatabaseModule } from '../database/database.module';
 import { DocumentsRepository } from '../documents/documents.repository';
 import { EmbeddingsModule } from '../embeddings/embeddings.module';
 import { QueuesModule } from '../queues/queues.module';
+import { SearchModule } from '../search/search.module';
+import { TelemetryModule } from '../telemetry/telemetry.module';
 import { DocumentProcessingProcessor } from './document-processing.processor';
 
 @Module({
@@ -18,6 +20,8 @@ import { DocumentProcessingProcessor } from './document-processing.processor';
     DatabaseModule,
     QueuesModule,
     EmbeddingsModule,
+    SearchModule,
+    TelemetryModule,
   ],
   providers: [DocumentsRepository, DocumentProcessingProcessor],
 })

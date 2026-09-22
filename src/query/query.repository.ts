@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { SearchService } from '../search/search.service';
 
 export type RetrievedChunk = {
   documentId: string;
@@ -20,12 +21,16 @@ type RetrievedChunkRow = {
 
 @Injectable()
 export class QueryRepository {
-  constructor(private readonly prismaService: PrismaService) {}
+  constructor(
+    private readonly prismaService: PrismaService,
+    private readonly search: SearchService,
+  ) {}
 
   async vectorSearch(input: {
     embedding: number[];
     limit: number;
   }): Promise<RetrievedChunk[]> {
+    if (this.search.enabled) return this.search.vectorSearch(input);
     const rows = await this.prismaService.$queryRaw<RetrievedChunkRow[]>`
         SELECT
           dc.document_id,
@@ -54,6 +59,7 @@ export class QueryRepository {
     query: string;
     limit: number;
   }): Promise<RetrievedChunk[]> {
+    if (this.search.enabled) return this.search.keywordSearch(input);
     const rows = await this.prismaService.$queryRaw<RetrievedChunkRow[]>`
         SELECT
           dc.document_id,
